@@ -1,0 +1,141 @@
+*busy.txt*  Animated loading indicator for LSP and Telescope operations
+
+Author:   David
+License:  MIT
+Homepage: https://github.com/yourusername/nvim-busy.nvim
+
+==============================================================================
+CONTENTS                                                        *busy-contents*
+
+  1. Introduction .............. |busy-intro|
+  2. Requirements .............. |busy-requirements|
+  3. Setup ..................... |busy.setup()|
+  4. API ....................... |busy-api|
+  5. Configuration ............. |busy-config|
+
+==============================================================================
+1. INTRODUCTION                                                   *busy-intro*
+
+nvim-busy shows a small animated braille indicator at the bottom of the
+screen (a floating window, not a statusline component) whenever Neovim is
+waiting on an asynchronous operation:
+
+  - LSP server background indexing / loading ($/progress messages)
+  - LSP navigation requests: gd, gD, gi, gr, K, gk
+  - Telescope live_grep / find_files search in progress
+
+The indicator disappears automatically when the operation completes.
+It does not steal focus and does not interfere with normal editing.
+
+==============================================================================
+2. REQUIREMENTS                                            *busy-requirements*
+
+  - Neovim >= 0.10
+  - No other plugins required
+
+Optional integrations:
+  - telescope.nvim  — animated prompt counter
+  - Any LSP server managed by mason.nvim / lspconfig / roslyn.nvim
+
+==============================================================================
+3. SETUP                                                       *busy.setup()*
+
+Call setup() once during Neovim startup, typically from your lazy.nvim spec:
+>lua
+  require("busy").setup(opts)
+<
+
+`opts` is an optional table; omitted keys use their defaults. See |busy-config|
+for all available options.
+
+==============================================================================
+4. API                                                            *busy-api*
+
+busy.push({id})                                               *busy.push()*
+  Mark a named task as started. The indicator appears immediately.
+  `id` must be a unique string identifying this busy reason.
+
+busy.pop({id})                                                 *busy.pop()*
+  Mark a named task as finished. The indicator disappears when all pushed
+  ids have been popped.
+  `id` must match the string passed to |busy.push()|.
+
+busy.wrap({fn} [, {id}])                                      *busy.wrap()*
+  Wrap an LSP buf function with automatic push/pop around the call.
+  Use in your on_attach instead of calling vim.lsp.buf.* directly: >lua
+
+    map("n", "gd", busy.wrap(vim.lsp.buf.definition, "lsp:gd"), "Goto Definition")
+<
+  `fn`  — the function to wrap (e.g. vim.lsp.buf.definition)
+  `id`  — optional stable id string; defaults to a fn-based key
+
+==============================================================================
+5. CONFIGURATION                                               *busy-config*
+
+Default configuration with all options shown: >lua
+
+  require("busy").setup({
+    animation = "dots",        -- "dots"|"arc"|"line"|"bounce"|string[]
+    speed_ms  = 80,
+    position  = "bottom-left", -- "bottom-left"|"bottom-right"
+    text      = " loading",    -- suffix label, or false to hide
+    blend     = 0,             -- winblend 0-100
+    zindex    = 45,
+    lsp = {
+      enabled        = true,
+      watch_progress = true,
+      watch_requests = false,
+      request_ttl_ms = 10000,
+    },
+    telescope = {
+      enabled         = true,
+      animate_counter = true,
+    },
+  })
+<
+
+animation ~
+  Animation pattern name or a custom table of frame strings.
+  Built-in patterns: "dots", "arc", "line", "bounce"
+
+speed_ms ~
+  Milliseconds between animation frames. Default: 80.
+
+position ~
+  Where the floating bar appears. "bottom-left" or "bottom-right".
+
+text ~
+  String appended after the spinner frame. Set to `false` to show only
+  the spinner character with no label.
+
+blend ~
+  `winblend` of the floating window. 0 = fully opaque background.
+  100 = fully transparent background (only the text is visible).
+
+zindex ~
+  Z-order of the floating window. Default 45 places it above normal
+  editor windows but below completion menus (100).
+
+lsp.watch_progress ~
+  When true, the indicator shows during LSP $/progress messages
+  (background indexing, loading). Uses the `LspProgress` autocmd.
+
+lsp.watch_requests ~
+  When true, the indicator shows while waiting for gd/gr/K/etc.
+  Requires wrapping the keymaps via |busy.wrap()| in on_attach.
+
+lsp.request_ttl_ms ~
+  Fallback timeout in ms for request wrapping. The indicator is always
+  cleared after this duration even if the server never responds.
+
+telescope.enabled ~
+  When true, the indicator activates while a Telescope picker is open
+  and searching.
+
+telescope.animate_counter ~
+  When true, replaces Telescope's built-in "*" in-progress marker with
+  an animated spinner frame. Requires adding `get_status_text` to your
+  Telescope defaults (see README).
+
+==============================================================================
+vim:tw=78:ts=8:ft=help:norl:
