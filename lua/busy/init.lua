@@ -34,9 +34,9 @@ local _defaults = {
   cmdline = {
     enabled   = true,
     patterns  = { ":", "/", "?" }, -- cmdline types that trigger the overlay
-    blend     = 30,                -- winblend of the dim overlay (0–100)
+    blend     = 65,                -- winblend of the dim overlay (0–100)
     animation = "dots",            -- spinner pattern (same options as main animation)
-    speed_ms  = 80,                -- spinner tick interval in ms
+    speed_ms  = 150,               -- spinner tick interval in ms
   },
 }
 

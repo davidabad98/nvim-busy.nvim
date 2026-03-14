@@ -1,19 +1,16 @@
 -- lua/busy/cmdline.lua
 -- Command mode dim overlay for nvim-busy.
 --
--- When the user enters `:`, `/`, or `?` command mode two floating windows
--- appear simultaneously:
+-- When the user enters `:`, `/`, or `?` command mode a single full-screen
+-- floating window appears:
 --
---   1. A full-screen dim overlay (zindex=10) that covers the editor content
---      area without touching the statusline or cmdline.  The overlay is
---      semi-transparent (winblend=30 by default) so the underlying text is
---      still legible.
+--   - A semi-transparent dim overlay covering the editor content area
+--     (not the statusline or cmdline row).
+--   - An animated spinner character written directly into the overlay buffer
+--     via an extmark at the centre line, so it shares the same window and
+--     avoids any float-on-float compositing artefacts.
 --
---   2. A 3-cell-wide animated spinner centred in the content area (zindex=11),
---      using the same braille animation frames as the main busy bar.  No
---      "loading" label — just the frame character.
---
--- Both windows are hidden the moment CmdlineLeave fires.
+-- The window is hidden the moment CmdlineLeave fires.
 -- A dedicated vim.uv timer drives the spinner; it runs only while command
 -- mode is active, keeping CPU overhead at zero when idle.
 
@@ -29,9 +26,7 @@ local _opts = {}          -- config slice passed from init.lua
 
 local _overlay_buf = nil  -- persistent scratch buffer for the dim overlay
 local _overlay_win = nil  -- floating window id (nil when hidden)
-
-local _spinner_buf = nil  -- persistent scratch buffer for the centred spinner
-local _spinner_win = nil  -- floating window id (nil when hidden)
+local _spinner_ns  = nil  -- extmark namespace for the spinner character
 
 local _timer       = nil  -- vim.uv timer; only runs during command mode
 local _active      = false -- guard against duplicate enter/leave events
@@ -61,8 +56,8 @@ end
 
 -- nvim_open_win / nvim_win_set_config table for the full-screen overlay.
 local function overlay_win_config()
-  local ct  = content_top()
-  local ch  = content_height()
+  local ct = content_top()
+  local ch = content_height()
   return {
     relative  = "editor",
     anchor    = "NW",
@@ -76,25 +71,13 @@ local function overlay_win_config()
   }
 end
 
--- nvim_open_win / nvim_win_set_config table for the centred spinner.
-local function spinner_win_config()
-  local ct  = content_top()
-  local ch  = content_height()
-  local w   = 3
-  local h   = 1
-  local row = ct + math.floor((ch - h) / 2)
-  local col = math.floor((vim.o.columns - w) / 2)
-  return {
-    relative  = "editor",
-    anchor    = "NW",
-    row       = math.max(row, ct),
-    col       = math.max(col, 0),
-    width     = w,
-    height    = h,
-    style     = "minimal",
-    focusable = false,
-    zindex    = 11,  -- just above the overlay, still below busy bar
-  }
+-- Returns the (0-based) line and byte-col for the spinner inside the overlay.
+local function spinner_pos()
+  local ch = math.max(content_height(), 1)
+  local w  = math.max(vim.o.columns, 1)
+  local line = math.floor((ch - 1) / 2)
+  local col  = math.floor((w - 1) / 2)
+  return line, col
 end
 
 -- ---------------------------------------------------------------------------
@@ -113,18 +96,6 @@ local function ensure_overlay_buf()
   return buf
 end
 
-local function ensure_spinner_buf()
-  if _spinner_buf and vim.api.nvim_buf_is_valid(_spinner_buf) then
-    return _spinner_buf
-  end
-  local ok, buf = pcall(vim.api.nvim_create_buf, false, true)
-  if not ok or not buf then return nil end
-  vim.api.nvim_set_option_value("bufhidden", "hide", { buf = buf })
-  vim.api.nvim_set_option_value("filetype", "busy_cmdline_spinner", { buf = buf })
-  _spinner_buf = buf
-  return buf
-end
-
 -- Fill the overlay buffer with blank lines so the highlight group covers
 -- every cell (not just lines with text).
 local function fill_overlay_buf(buf)
@@ -137,77 +108,70 @@ local function fill_overlay_buf(buf)
   pcall(vim.api.nvim_buf_set_lines, buf, 0, -1, false, lines)
 end
 
+-- Place (or update) the spinner extmark in the overlay buffer.
+local function update_spinner_extmark(buf, frame)
+  if not _spinner_ns then
+    _spinner_ns = vim.api.nvim_create_namespace("NvimBusyCmdlineSpinner")
+  end
+  local line, col = spinner_pos()
+  -- Clear previous mark then place the new frame.
+  vim.api.nvim_buf_clear_namespace(buf, _spinner_ns, 0, -1)
+  pcall(vim.api.nvim_buf_set_extmark, buf, _spinner_ns, line, col, {
+    virt_text       = { { frame, "BusyCmdlineSpinner" } },
+    virt_text_pos   = "overlay",
+    hl_mode         = "combine",
+  })
+end
+
 -- ---------------------------------------------------------------------------
 -- Show / hide
 -- ---------------------------------------------------------------------------
 
-local function show_overlay()
-  pcall(function()
+local function show_overlay(frame)
+  local ok, err = pcall(function()
     local buf = ensure_overlay_buf()
     if not buf then return end
 
-    fill_overlay_buf(buf)
     local cfg = overlay_win_config()
 
     if _overlay_win and vim.api.nvim_win_is_valid(_overlay_win) then
+      -- Window already open — just resize if terminal dimensions changed.
       vim.api.nvim_win_set_config(_overlay_win, cfg)
     else
+      -- First show: fill buffer and open window.
+      fill_overlay_buf(buf)
       cfg.noautocmd = true
-      local ok, win = pcall(vim.api.nvim_open_win, buf, false, cfg)
-      if not ok or not win or win == 0 then return end
+      local wok, win = pcall(vim.api.nvim_open_win, buf, false, cfg)
+      if not wok or not win or win == 0 then return end
       _overlay_win = win
 
-      vim.api.nvim_win_call(_overlay_win, function()
-        vim.opt_local.winblend   = _opts.blend or 30
-        vim.opt_local.wrap       = false
-        vim.opt_local.cursorline = false
-        vim.opt_local.winhighlight =
-          "Normal:BusyCmdlineOverlay,EndOfBuffer:BusyCmdlineOverlay"
-      end)
+      vim.api.nvim_set_option_value("winblend",     _opts.blend or 65,  { win = _overlay_win })
+      vim.api.nvim_set_option_value("wrap",          false,              { win = _overlay_win })
+      vim.api.nvim_set_option_value("cursorline",    false,              { win = _overlay_win })
+      vim.api.nvim_set_option_value("winhighlight",
+        "Normal:BusyCmdlineOverlay,EndOfBuffer:BusyCmdlineOverlay",      { win = _overlay_win })
     end
+
+    -- Always update the spinner extmark so the frame advances.
+    update_spinner_extmark(buf, frame)
   end)
+  if not ok then
+    vim.notify("[nvim-busy] show_overlay error: " .. tostring(err), vim.log.levels.DEBUG)
+  end
 end
 
-local function show_spinner(frame)
-  pcall(function()
-    local buf = ensure_spinner_buf()
-    if not buf then return end
-
-    local text = " " .. frame .. " "
-    pcall(vim.api.nvim_buf_set_lines, buf, 0, -1, false, { text })
-
-    local cfg = spinner_win_config()
-
-    if _spinner_win and vim.api.nvim_win_is_valid(_spinner_win) then
-      vim.api.nvim_win_set_config(_spinner_win, cfg)
-    else
-      cfg.noautocmd = true
-      local ok, win = pcall(vim.api.nvim_open_win, buf, false, cfg)
-      if not ok or not win or win == 0 then return end
-      _spinner_win = win
-
-      vim.api.nvim_win_call(_spinner_win, function()
-        vim.opt_local.winblend   = 0
-        vim.opt_local.wrap       = false
-        vim.opt_local.cursorline = false
-        vim.opt_local.winhighlight = "Normal:BusyCmdlineSpinner"
-      end)
-    end
-  end)
-end
-
-local function hide_all()
+local function hide_overlay()
   pcall(function()
     if _overlay_win and vim.api.nvim_win_is_valid(_overlay_win) then
       vim.api.nvim_win_hide(_overlay_win)
     end
     _overlay_win = nil
   end)
+  -- Clear extmarks so they don't linger when the buffer is reused.
   pcall(function()
-    if _spinner_win and vim.api.nvim_win_is_valid(_spinner_win) then
-      vim.api.nvim_win_hide(_spinner_win)
+    if _overlay_buf and vim.api.nvim_buf_is_valid(_overlay_buf) and _spinner_ns then
+      vim.api.nvim_buf_clear_namespace(_overlay_buf, _spinner_ns, 0, -1)
     end
-    _spinner_win = nil
   end)
 end
 
@@ -219,12 +183,12 @@ local function tick()
   if not _active then return end
   local frame = animation.current_frame(
     _opts.animation or "dots",
-    _opts.speed_ms  or 80
+    _opts.speed_ms  or 150
   )
-  -- Overlay only needs updating when terminal is resized; spinner updates
-  -- every tick to advance the animation frame.
-  show_overlay()
-  show_spinner(frame)
+  show_overlay(frame)
+  -- Use plain "redraw" (not "redraw!") in the tick — it only repaints dirty
+  -- regions and is much cheaper than a full redraw every 150 ms.
+  pcall(vim.cmd, "redraw")
 end
 
 -- ---------------------------------------------------------------------------
@@ -235,20 +199,21 @@ function M._on_enter()
   if _active then return end
   _active = true
 
-  -- Show immediately (first frame) before the timer fires.
-  local frame = animation.current_frame(_opts.animation or "dots", _opts.speed_ms or 80)
-  show_overlay()
-  show_spinner(frame)
+  local frame = animation.current_frame(_opts.animation or "dots", _opts.speed_ms or 150)
+  show_overlay(frame)
 
-  -- Start dedicated timer.
+  -- Full redraw! required on enter to force Neovim to paint the float
+  -- while the cmdline has focus (plain "redraw" is not enough here).
+  pcall(vim.cmd, "redraw!")
+
   if _timer then
     pcall(function() _timer:stop() ; _timer:close() end)
     _timer = nil
   end
   _timer = vim.uv.new_timer()
   _timer:start(
-    _opts.speed_ms or 80,
-    _opts.speed_ms or 80,
+    _opts.speed_ms or 150,
+    _opts.speed_ms or 150,
     vim.schedule_wrap(tick)
   )
 end
@@ -257,13 +222,12 @@ function M._on_leave()
   if not _active then return end
   _active = false
 
-  -- Stop the timer first so no further ticks race with hide_all().
   if _timer then
     pcall(function() _timer:stop() ; _timer:close() end)
     _timer = nil
   end
 
-  hide_all()
+  hide_overlay()
 end
 
 -- ---------------------------------------------------------------------------
@@ -274,16 +238,13 @@ function M.reposition()
   pcall(function()
     if not _active then return end
 
-    -- Re-fill overlay buffer for the new terminal dimensions.
-    if _overlay_buf and vim.api.nvim_buf_is_valid(_overlay_buf) then
-      fill_overlay_buf(_overlay_buf)
+    local buf = _overlay_buf
+    if buf and vim.api.nvim_buf_is_valid(buf) then
+      fill_overlay_buf(buf)
     end
 
     if _overlay_win and vim.api.nvim_win_is_valid(_overlay_win) then
       vim.api.nvim_win_set_config(_overlay_win, overlay_win_config())
-    end
-    if _spinner_win and vim.api.nvim_win_is_valid(_spinner_win) then
-      vim.api.nvim_win_set_config(_spinner_win, spinner_win_config())
     end
   end)
 end
@@ -301,13 +262,13 @@ function M.setup(opts)
   vim.api.nvim_create_autocmd("CmdlineEnter", {
     group    = augroup,
     pattern  = patterns,
-    callback = vim.schedule_wrap(M._on_enter),
+    callback = M._on_enter,
   })
 
   vim.api.nvim_create_autocmd("CmdlineLeave", {
     group    = augroup,
     pattern  = patterns,
-    callback = vim.schedule_wrap(M._on_leave),
+    callback = M._on_leave,
   })
 end
 
