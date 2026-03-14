@@ -1,6 +1,6 @@
 -- lua/busy/init.lua
 -- nvim-busy.nvim — lightweight loading indicator for LSP and Telescope.
--- https://github.com/yourusername/nvim-busy.nvim
+-- https://github.com/davidabad98/nvim-busy.nvim
 
 -- Neovim version guard — requires LspProgress autocmd and vim.uv.
 if vim.fn.has("nvim-0.10") == 0 then

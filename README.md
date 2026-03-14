@@ -22,7 +22,7 @@ finishes — no config required.
 
 ```lua
 {
-  "yourusername/nvim-busy.nvim",
+  "davidabad98/nvim-busy.nvim",
   lazy = false,        -- must load eagerly so signals are hooked on startup
   priority = 900,      -- load before LSP / Telescope plugins
   opts = {},           -- calls setup() with all defaults

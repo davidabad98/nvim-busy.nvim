@@ -2,7 +2,7 @@
 
 Author:   David
 License:  MIT
-Homepage: https://github.com/yourusername/nvim-busy.nvim
+Homepage: https://github.com/davidabad98/nvim-busy.nvim
 
 ==============================================================================
 CONTENTS                                                        *busy-contents*
@@ -54,7 +54,7 @@ See |busy-config| for all available options.
 
 Recommended lazy.nvim spec: >lua
   {
-    "yourusername/nvim-busy.nvim",
+    "davidabad98/nvim-busy.nvim",
     lazy     = false,   -- eager load so autocmds fire from startup
     priority = 900,     -- load before LSP / Telescope
     opts     = {},
