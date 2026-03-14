@@ -2,7 +2,8 @@
 
 > A lightweight, zero-dependency Neovim plugin that shows an animated loading
 > indicator whenever the editor is waiting — LSP background indexing, LSP
-> navigation requests (`gd`, `gr`, `K`, …), or a Telescope search in progress.
+> navigation requests (`gd`, `gr`, `K`, …), a Telescope search in progress,
+> or the user is typing a command.
 
 The indicator is a small animated braille spinner in a floating bar at the
 bottom of the screen. It appears when work begins and disappears when it
@@ -15,6 +16,7 @@ finishes — no config required.
 - Neovim >= 0.10
 - No other plugins required
 - Optional: `telescope.nvim` for the in-prompt spinner
+- Optional: nothing — command mode overlay is built-in
 
 ## Installation
 
@@ -50,6 +52,14 @@ require("busy").setup({
   telescope = {
     enabled         = true,
     animate_counter = true,  -- animated spinner in Telescope's prompt counter
+  },
+
+  cmdline = {
+    enabled   = true,            -- dim overlay + spinner on :, /, ?
+    patterns  = {":", "/", "?"}, -- which cmdline types trigger the overlay
+    blend     = 30,              -- winblend of the dim overlay (0-100)
+    animation = "dots",          -- animation pattern for the centred spinner
+    speed_ms  = 80,              -- spinner tick interval in ms
   },
 })
 ```
@@ -100,20 +110,41 @@ end
 
 > **Note**: `lsp.watch_requests = true` must also be set in `setup()`.
 
+## Command mode overlay
+
+When the user presses `:`, `/`, or `?` to enter command mode, nvim-busy
+shows two floating windows on top of the editor content:
+
+1. **Full-screen dim overlay** — semi-transparent black tint covering the
+   content area (not the statusline or cmdline). Controlled by the
+   `BusyCmdlineOverlay` highlight group.
+2. **Centred animated spinner** — a single braille frame character centred
+   in the content area. Controlled by the `BusyCmdlineSpinner` highlight
+   group (links to `Statement` by default for visibility against the dim).
+
+Both windows disappear instantly on `CmdlineLeave`. A dedicated `vim.uv`
+timer drives the animation and runs only while command mode is active.
+
+Set `cmdline.enabled = false` to disable the feature entirely.
+
 ## Highlight groups
 
 Two highlight groups are defined with sensible defaults you can override:
 
-| Group               | Default         | What it styles                    |
-|---------------------|-----------------|-----------------------------------|
-| `BusyIndicator`     | links `Comment` | floating window background + text |
-| `BusyIndicatorText` | links `Comment` | the ` loading` label portion only |
+| Group                   | Default            | What it styles                          |
+|-------------------------|--------------------|-----------------------------------------|
+| `BusyIndicator`         | links `Comment`    | floating window background + text       |
+| `BusyIndicatorText`     | links `Comment`    | the ` loading` label portion only       |
+| `BusyCmdlineOverlay`    | black bg           | full-screen dim overlay                 |
+| `BusyCmdlineSpinner`    | links `Statement`  | centred spinner in command mode         |
 
 Override example:
 
 ```lua
-vim.api.nvim_set_hl(0, "BusyIndicator",     { fg = "#cba6f7", bg = "#1e1e2e" })
-vim.api.nvim_set_hl(0, "BusyIndicatorText", { fg = "#a6adc8", bg = "#1e1e2e" })
+vim.api.nvim_set_hl(0, "BusyIndicator",      { fg = "#cba6f7", bg = "#1e1e2e" })
+vim.api.nvim_set_hl(0, "BusyIndicatorText",  { fg = "#a6adc8", bg = "#1e1e2e" })
+vim.api.nvim_set_hl(0, "BusyCmdlineOverlay", { bg = "#000000" })
+vim.api.nvim_set_hl(0, "BusyCmdlineSpinner", { fg = "#cba6f7" })
 ```
 
 ## Public API
@@ -133,7 +164,10 @@ require("busy").wrap(fn, id)  -- wrap a function with push/pop around it
   just above the cmdline/statusline).
 - Signal sources are purely event-driven: `LspProgress` autocmd for
   background indexing, `LspRequest` autocmd for precise navigation-request
-  tracking, and Telescope's `register_completion_callback` for search state.
+  tracking, Telescope's `register_completion_callback` for search state, and
+  `CmdlineEnter`/`CmdlineLeave` autocmds for the command mode overlay.
+- A dedicated per-feature timer is used for the command mode overlay so it
+  runs only while command mode is active, keeping CPU overhead at zero otherwise.
 - All state is reference-counted by string id — the bar disappears only when
   every concurrent operation has finished.
 - Inspired by [fidget.nvim](https://github.com/j-hui/fidget.nvim), with which

@@ -15,6 +15,7 @@ CONTENTS                                                        *busy-contents*
   6. Highlight Groups .......... |busy-highlights|
   7. Telescope Integration ..... |busy-telescope|
   8. Commands .................. |busy-commands|
+  9. Command Mode Overlay ....... |busy-cmdline|
 
 ==============================================================================
 1. INTRODUCTION                                                   *busy-intro*
@@ -26,6 +27,7 @@ waiting on an asynchronous operation:
   - LSP server background indexing / loading ($/progress messages)
   - LSP navigation requests: gd, gD, gi, gr, K, gk
   - Telescope live_grep / find_files search in progress
+  - User entering command mode (`:`, `/`, `?`)
 
 The indicator disappears automatically when the operation completes.
 It does not steal focus and does not interfere with normal editing.
@@ -111,6 +113,13 @@ Default configuration with all options shown: >lua
       enabled         = true,
       animate_counter = true,
     },
+    cmdline = {
+      enabled   = true,
+      patterns  = { ":", "/", "?" },
+      blend     = 30,
+      animation = "dots",
+      speed_ms  = 80,
+    },
   })
 <
 
@@ -161,6 +170,29 @@ telescope.animate_counter ~
   replaces Telescope's built-in "*" marker. Must be wired in manually —
   see |busy-telescope|.
 
+cmdline.enabled ~
+  When true, a full-screen dim overlay and a centred animated spinner are
+  shown whenever the user enters command mode (`:`, `/`, `?`). Both
+  disappear on CmdlineLeave. Default: true.
+  See |busy-cmdline| for full details.
+
+cmdline.patterns ~
+  List of cmdline types that trigger the overlay. Matches the pattern
+  argument of the CmdlineEnter autocmd (single characters). Default:
+  { ":", "/", "?" }.
+
+cmdline.blend ~
+  winblend of the full-screen dim overlay. 0 = opaque, 100 = invisible.
+  30 gives a legible but clearly-dimmed effect. Default: 30.
+
+cmdline.animation ~
+  Animation pattern for the centred spinner. Same values as the top-level
+  `animation` option. Default: "dots".
+
+cmdline.speed_ms ~
+  Milliseconds between spinner frames. Independent of the top-level
+  `speed_ms`. Default: 80.
+
 ==============================================================================
 6. HIGHLIGHT GROUPS                                          *busy-highlights*
 
@@ -176,9 +208,22 @@ BusyIndicatorText ~
   Applied via extmark to the label portion only (the " loading" text).
   Default: links to |hl-Comment|.
 
+BusyCmdlineOverlay ~
+  Applied to the full-screen dim overlay window via
+  `winhighlight = "Normal:BusyCmdlineOverlay,EndOfBuffer:BusyCmdlineOverlay"`.
+  Default: `{ bg = "#000000" }` (black) — combined with winblend=30 this
+  creates the dimming effect.
+
+BusyCmdlineSpinner ~
+  Applied to the centred spinner window.
+  Default: links to |hl-Statement| (typically a bright colour) so it is
+  visible against the dimmed overlay.
+
 Override example: >lua
-  vim.api.nvim_set_hl(0, "BusyIndicator",     { fg = "#cba6f7", bg = "#1e1e2e" })
-  vim.api.nvim_set_hl(0, "BusyIndicatorText", { fg = "#a6adc8", bg = "#1e1e2e" })
+  vim.api.nvim_set_hl(0, "BusyIndicator",      { fg = "#cba6f7", bg = "#1e1e2e" })
+  vim.api.nvim_set_hl(0, "BusyIndicatorText",  { fg = "#a6adc8", bg = "#1e1e2e" })
+  vim.api.nvim_set_hl(0, "BusyCmdlineOverlay", { bg = "#000000" })
+  vim.api.nvim_set_hl(0, "BusyCmdlineSpinner", { fg = "#cba6f7" })
 <
 Place this after setup() or inside an |autocmd| for ColorScheme.
 
@@ -214,6 +259,40 @@ Place this after setup() or inside an |autocmd| for ColorScheme.
   Print the current set of active task ids to |vim.notify|.
   Shows "idle" when no tasks are active, or a table of id → count pairs
   when one or more tasks are in progress. Useful for debugging stale state.
+
+==============================================================================
+9. COMMAND MODE OVERLAY                                        *busy-cmdline*
+
+When `cmdline.enabled = true` (the default), entering `:`, `/`, or `?`
+causes two floating windows to appear over the editor content area:
+
+1. Full-screen dim overlay ~
+   Covers the entire content area (not the statusline or cmdline row).
+   Uses `relative="editor"` with `zindex=10` and `winblend` from
+   `cmdline.blend` (default 30).  Highlight group: |BusyCmdlineOverlay|.
+
+2. Centred animated spinner ~
+   A 3-cell-wide, 1-line float centred in the content area, showing a
+   single braille animation frame.  Uses `zindex=11`.
+   Highlight group: |BusyCmdlineSpinner|.
+
+Both windows are destroyed on `CmdlineLeave`.  A dedicated |vim.uv| timer
+drives the spinner; it starts on enter and stops on leave, so there is zero
+CPU cost when command mode is not active.
+
+The feature responds to |VimResized| and repositions both windows whenever
+the terminal is resized while command mode is active.
+
+Configuration keys — see |busy-config| (cmdline.*):
+  - cmdline.enabled   — enable/disable the feature
+  - cmdline.patterns  — list of cmdline types to match
+  - cmdline.blend     — overlay transparency
+  - cmdline.animation — animation pattern for the spinner
+  - cmdline.speed_ms  — spinner tick interval
+
+Highlight groups — see |busy-highlights|:
+  - |BusyCmdlineOverlay| — controls the dim tint colour
+  - |BusyCmdlineSpinner| — controls the spinner foreground colour
 
 ==============================================================================
 vim:tw=78:ts=8:ft=help:norl:

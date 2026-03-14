@@ -31,6 +31,13 @@ local _defaults = {
     enabled = true,
     animate_counter = true, -- replace Telescope's "*" with animated spinner
   },
+  cmdline = {
+    enabled   = true,
+    patterns  = { ":", "/", "?" }, -- cmdline types that trigger the overlay
+    blend     = 30,                -- winblend of the dim overlay (0–100)
+    animation = "dots",            -- spinner pattern (same options as main animation)
+    speed_ms  = 80,                -- spinner tick interval in ms
+  },
 }
 
 M._config = vim.deepcopy(_defaults)
@@ -56,6 +63,14 @@ local function define_highlights()
   -- Default: also links to Comment; separate so users can give the text a
   -- different colour from the spinner character.
   vim.api.nvim_set_hl(0, "BusyIndicatorText", { link = "Comment", default = true })
+  -- BusyCmdlineOverlay: background of the full-screen dim overlay.
+  -- Default: solid black — made semi-transparent by winblend=30.
+  -- Override to change the dim colour, e.g. a dark version of your theme bg.
+  vim.api.nvim_set_hl(0, "BusyCmdlineOverlay", { bg = "#000000", default = true })
+  -- BusyCmdlineSpinner: the centred animated frame shown over the overlay.
+  -- Default: links to Statement (typically bright/highlighted) so it stands
+  -- out against the dimmed background.
+  vim.api.nvim_set_hl(0, "BusyCmdlineSpinner", { link = "Statement", default = true })
 end
 
 -- ---------------------------------------------------------------------------
@@ -116,15 +131,7 @@ function M.setup(opts)
     group = _augroup,
     callback = vim.schedule_wrap(function()
       require("busy.window").reposition()
-    end),
-  })
-
-  -- When the cmdline is active the floating bar can overlap it if
-  -- cmdheight=0. Hide during cmdline input; the timer restores it on exit.
-  vim.api.nvim_create_autocmd("CmdlineEnter", {
-    group = _augroup,
-    callback = vim.schedule_wrap(function()
-      require("busy.window").hide()
+      require("busy.cmdline").reposition()
     end),
   })
 
@@ -176,6 +183,13 @@ function M.setup(opts)
     local ok, tel = pcall(require, "busy.telescope")
     if ok then
       tel.setup(M._config.telescope)
+    end
+  end
+
+  if M._config.cmdline.enabled then
+    local ok, cmdline = pcall(require, "busy.cmdline")
+    if ok then
+      cmdline.setup(M._config.cmdline)
     end
   end
 
