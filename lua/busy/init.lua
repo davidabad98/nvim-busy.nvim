@@ -47,11 +47,15 @@ local _augroup = nil -- autocmd group for VimResized + CmdlineEnter/Leave
 -- ---------------------------------------------------------------------------
 
 local function define_highlights()
-  -- BusyIndicator: window background + text colour.
+  -- BusyIndicator: window background colour (applied via winhighlight).
   -- Default: link to Comment so it is visually subtle.
   -- Users can override after setup():
   --   vim.api.nvim_set_hl(0, "BusyIndicator", { fg = "#cba6f7", bg = "#1e1e2e" })
   vim.api.nvim_set_hl(0, "BusyIndicator", { link = "Comment", default = true })
+  -- BusyIndicatorText: the " loading" label portion (after the spinner frame).
+  -- Default: also links to Comment; separate so users can give the text a
+  -- different colour from the spinner character.
+  vim.api.nvim_set_hl(0, "BusyIndicatorText", { link = "Comment", default = true })
 end
 
 -- ---------------------------------------------------------------------------
@@ -121,6 +125,23 @@ function M.setup(opts)
     group = _augroup,
     callback = vim.schedule_wrap(function()
       require("busy.window").hide()
+    end),
+  })
+
+  -- Quickfix / location-list windows at the bottom shift the available
+  -- height. Reposition whenever any window opens or closes.
+  vim.api.nvim_create_autocmd({ "WinNew", "WinClosed" }, {
+    group = _augroup,
+    callback = vim.schedule_wrap(function()
+      require("busy.window").reposition()
+    end),
+  })
+
+  -- Session restore (e.g. auto-session): re-anchor after layout is rebuilt.
+  vim.api.nvim_create_autocmd("SessionLoadPost", {
+    group = _augroup,
+    callback = vim.schedule_wrap(function()
+      require("busy.window").reposition()
     end),
   })
 
