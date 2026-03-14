@@ -12,6 +12,9 @@ CONTENTS                                                        *busy-contents*
   3. Setup ..................... |busy.setup()|
   4. API ....................... |busy-api|
   5. Configuration ............. |busy-config|
+  6. Highlight Groups .......... |busy-highlights|
+  7. Telescope Integration ..... |busy-telescope|
+  8. Commands .................. |busy-commands|
 
 ==============================================================================
 1. INTRODUCTION                                                   *busy-intro*
@@ -27,6 +30,9 @@ waiting on an asynchronous operation:
 The indicator disappears automatically when the operation completes.
 It does not steal focus and does not interfere with normal editing.
 
+A single |vim.uv| timer at 80 ms drives the animation loop. Signal sources
+are event-driven (autocmds + callbacks), never polling.
+
 ==============================================================================
 2. REQUIREMENTS                                            *busy-requirements*
 
@@ -34,8 +40,7 @@ It does not steal focus and does not interfere with normal editing.
   - No other plugins required
 
 Optional integrations:
-  - telescope.nvim  — animated prompt counter
-  - Any LSP server managed by mason.nvim / lspconfig / roslyn.nvim
+  - telescope.nvim  — animated in-prompt spinner via get_status_text
 
 ==============================================================================
 3. SETUP                                                       *busy.setup()*
@@ -44,30 +49,45 @@ Call setup() once during Neovim startup, typically from your lazy.nvim spec:
 >lua
   require("busy").setup(opts)
 <
+`opts` is an optional table; omitted keys use their defaults.
+See |busy-config| for all available options.
 
-`opts` is an optional table; omitted keys use their defaults. See |busy-config|
-for all available options.
+Recommended lazy.nvim spec: >lua
+  {
+    "yourusername/nvim-busy.nvim",
+    lazy     = false,   -- eager load so autocmds fire from startup
+    priority = 900,     -- load before LSP / Telescope
+    opts     = {},
+  }
+<
 
 ==============================================================================
 4. API                                                            *busy-api*
 
 busy.push({id})                                               *busy.push()*
   Mark a named task as started. The indicator appears immediately.
-  `id` must be a unique string identifying this busy reason.
+  `id` must be a non-empty string identifying the busy reason. Multiple
+  concurrent callers with different ids are supported; the indicator stays
+  until all have called pop().
 
 busy.pop({id})                                                 *busy.pop()*
   Mark a named task as finished. The indicator disappears when all pushed
   ids have been popped.
-  `id` must match the string passed to |busy.push()|.
+  `id` must match the string passed to |busy.push()|. Calling pop() with an
+  id that was never pushed is a no-op.
 
 busy.wrap({fn} [, {id}])                                      *busy.wrap()*
-  Wrap an LSP buf function with automatic push/pop around the call.
-  Use in your on_attach instead of calling vim.lsp.buf.* directly: >lua
+  Wrap a function with automatic push/pop so the indicator shows for the
+  duration of the call. Designed for wrapping vim.lsp.buf.* in on_attach: >lua
 
-    map("n", "gd", busy.wrap(vim.lsp.buf.definition, "lsp:gd"), "Goto Definition")
+    map("n", "gd", busy.wrap(vim.lsp.buf.definition, "lsp:gd"),
+        { buffer = bufnr, desc = "Goto Definition" })
 <
-  `fn`  — the function to wrap (e.g. vim.lsp.buf.definition)
-  `id`  — optional stable id string; defaults to a fn-based key
+  `fn`  — the function to wrap (e.g. vim.lsp.buf.definition).
+  `id`  — optional stable id string; defaults to a function-address-based key.
+
+  A safety TTL (|lsp.request_ttl_ms|) always clears the id even if the
+  server never responds (crash, symbol not found, etc.).
 
 ==============================================================================
 5. CONFIGURATION                                               *busy-config*
@@ -78,7 +98,7 @@ Default configuration with all options shown: >lua
     animation = "dots",        -- "dots"|"arc"|"line"|"bounce"|string[]
     speed_ms  = 80,
     position  = "bottom-left", -- "bottom-left"|"bottom-right"
-    text      = " loading",    -- suffix label, or false to hide
+    text      = " loading",    -- suffix label, or false to show only the frame
     blend     = 0,             -- winblend 0-100
     zindex    = 45,
     lsp = {
@@ -97,6 +117,7 @@ Default configuration with all options shown: >lua
 animation ~
   Animation pattern name or a custom table of frame strings.
   Built-in patterns: "dots", "arc", "line", "bounce"
+  Custom example: `animation = { "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█" }`
 
 speed_ms ~
   Milliseconds between animation frames. Default: 80.
@@ -105,37 +126,94 @@ position ~
   Where the floating bar appears. "bottom-left" or "bottom-right".
 
 text ~
-  String appended after the spinner frame. Set to `false` to show only
-  the spinner character with no label.
+  String appended after the spinner frame (e.g. " loading"). Set to `false`
+  to display only the spinner character with no label.
 
 blend ~
   `winblend` of the floating window. 0 = fully opaque background.
-  100 = fully transparent background (only the text is visible).
+  100 = fully transparent (only the text characters are visible).
 
 zindex ~
-  Z-order of the floating window. Default 45 places it above normal
-  editor windows but below completion menus (100).
+  Z-order of the floating window. Default 45 places it above normal editor
+  windows but below completion menus (zindex 100).
 
 lsp.watch_progress ~
   When true, the indicator shows during LSP $/progress messages
-  (background indexing, loading). Uses the `LspProgress` autocmd.
+  (background indexing, server loading). Uses the LspProgress autocmd
+  (Neovim >= 0.10).
 
 lsp.watch_requests ~
-  When true, the indicator shows while waiting for gd/gr/K/etc.
-  Requires wrapping the keymaps via |busy.wrap()| in on_attach.
+  When true, the indicator shows while waiting for LSP server responses to
+  navigation requests (gd, gr, K, etc.). Requires wrapping the keymaps via
+  |busy.wrap()| in on_attach. Default: false.
 
 lsp.request_ttl_ms ~
-  Fallback timeout in ms for request wrapping. The indicator is always
-  cleared after this duration even if the server never responds.
+  Fallback timeout in milliseconds for request wrapping. The indicator is
+  always cleared after this duration even if the server never responds.
+  Default: 10000 (10 seconds).
 
 telescope.enabled ~
-  When true, the indicator activates while a Telescope picker is open
-  and searching.
+  When true, hooks Telescope's TelescopeFindPre event so the bottom bar
+  activates while a picker is open and searching. Default: true.
 
 telescope.animate_counter ~
-  When true, replaces Telescope's built-in "*" in-progress marker with
-  an animated spinner frame. Requires adding `get_status_text` to your
-  Telescope defaults (see README).
+  When true, the get_status_text function exported from busy.telescope
+  replaces Telescope's built-in "*" marker. Must be wired in manually —
+  see |busy-telescope|.
+
+==============================================================================
+6. HIGHLIGHT GROUPS                                          *busy-highlights*
+
+Two highlight groups are defined at setup() time. They use `default = true`
+so they are never forcibly overridden by the plugin after a colorscheme change.
+
+BusyIndicator ~
+  Applied to the entire floating window via `winhighlight = "Normal:BusyIndicator"`.
+  Controls the background colour and the spinner character's foreground colour.
+  Default: links to |hl-Comment|.
+
+BusyIndicatorText ~
+  Applied via extmark to the label portion only (the " loading" text).
+  Default: links to |hl-Comment|.
+
+Override example: >lua
+  vim.api.nvim_set_hl(0, "BusyIndicator",     { fg = "#cba6f7", bg = "#1e1e2e" })
+  vim.api.nvim_set_hl(0, "BusyIndicatorText", { fg = "#a6adc8", bg = "#1e1e2e" })
+<
+Place this after setup() or inside an |autocmd| for ColorScheme.
+
+==============================================================================
+7. TELESCOPE INTEGRATION                                     *busy-telescope*
+
+7.1 Bottom bar ~
+  Enabled automatically when `telescope.enabled = true` (the default). The
+  bottom bar activates when a Telescope picker opens and deactivates when the
+  picker is closed or the search completes.
+
+7.2 In-prompt animated counter ~
+  Replace Telescope's built-in "*" in-progress marker with an animated
+  spinner by adding `get_status_text` to your Telescope defaults: >lua
+
+    opts = {
+      defaults = {
+        get_status_text = function(self, opts)
+          local ok, bt = pcall(require, "busy.telescope")
+          if ok then return bt.get_status_text(self, opts) end
+        end,
+      },
+    },
+<
+  While searching: shows "<frame>  N / M" (frame advances with time).
+  When done:       shows "N / M" (plain count, spinner gone).
+  With selection:  shows "<frame>  S / N / M" (selected / showing / total).
+
+==============================================================================
+8. COMMANDS                                                  *busy-commands*
+
+:BusyStatus                                                   *:BusyStatus*
+  Print the current set of active task ids to |vim.notify|.
+  Shows "idle" when no tasks are active, or a table of id → count pairs
+  when one or more tasks are in progress. Useful for debugging stale state.
 
 ==============================================================================
 vim:tw=78:ts=8:ft=help:norl:
